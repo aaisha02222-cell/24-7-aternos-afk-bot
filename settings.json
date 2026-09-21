@@ -2,7 +2,7 @@
   "server": {
     "host": "COOLSMP9713.aternos.me",
     "port": 42424,
-    "version": "auto"
+    "version": "26.1"
   },
 
   "bot": {
