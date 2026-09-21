@@ -1,0 +1,1 @@
+{"name":"coolsmp-bot","version":"1.0.0","description":"A Mineflayer AFK/reconnect bot for Cool SMP.","main":"bot.js","scripts":{"start":"node bot.js"},"engines":{"node":">=18"},"dependencies":{"mineflayer":"^4.32.0"}}
