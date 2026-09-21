@@ -1,13 +1,411 @@
-const mineflayer=require('mineflayer');const fs=require('fs');
-if(!fs.existsSync('./settings.json')){console.error('settings.json not found. Copy settings.example.json to settings.json.');process.exit(1)}
-const s=JSON.parse(fs.readFileSync('./settings.json','utf8'));let bot=null,reconnectTimer=null,afkTimer=null,attempts=0;
-const log=m=>console.log(`[CoolSMP Bot] ${m}`);
-function clearTimers(){if(reconnectTimer)clearTimeout(reconnectTimer);if(afkTimer)clearInterval(afkTimer);reconnectTimer=afkTimer=null}
-function createBot(){clearTimers();log(`Connecting to ${s.server.host}:${s.server.port} as ${s.bot.username}...`);bot=mineflayer.createBot({host:s.server.host,port:s.server.port,username:s.bot.username,version:s.server.version});
-bot.once('spawn',()=>{attempts=0;log('Bot joined the server.');if(s.bot.authMe.enabled)setTimeout(authenticate,2500);if(s.behavior.antiAfk)startAfk()});
-bot.on('chat',(u,m)=>{if(u!==bot.username)handleChat(m)});bot.on('kicked',r=>log(`Bot was kicked: ${r}`));bot.on('error',e=>log(`Error: ${e.message}`));bot.on('end',r=>{log(`Disconnected: ${r||'unknown reason'}`);clearTimers();reconnect()})}
-function authenticate(){const a=s.bot.authMe;if(!a.enabled)return;if(!a.password||a.password==='CHANGE_THIS_PASSWORD'){log('Set your AuthMe password in settings.json.');return}bot.chat(`${a.loginCommand} ${a.password}`)}
-function handleChat(m){if(!s.behavior.chatCommandsEnabled)return;const c=m.trim().toLowerCase();if(c==='!help')bot.chat('Bot commands: !help, !ping, !status');else if(c==='!ping')bot.chat('Pong!');else if(c==='!status')bot.chat('Cool SMP bot is online.')}
-function startAfk(){afkTimer=setInterval(()=>{if(!bot?.entity)return;bot.setControlState('jump',true);setTimeout(()=>bot&&bot.setControlState('jump',false),350)},s.behavior.antiAfkIntervalMs)}
-function reconnect(){if(!s.bot.reconnect.enabled)return;const max=s.bot.reconnect.maxAttempts;if(max>0&&attempts>=max){log('Maximum reconnect attempts reached.');return}attempts++;log(`Reconnecting in ${Math.round(s.bot.reconnect.delayMs/1000)} seconds...`);reconnectTimer=setTimeout(createBot,s.bot.reconnect.delayMs)}
-process.on('SIGINT',()=>{clearTimers();if(bot)bot.quit('Bot shutting down');process.exit(0)});createBot();
+const mineflayer = require("mineflayer");
+const fs = require("fs");
+
+if (!fs.existsSync("./settings.json")) {
+  console.error(
+    "settings.json not found. Copy settings.example.json to settings.json."
+  );
+  process.exit(1);
+}
+
+const settings = JSON.parse(
+  fs.readFileSync("./settings.json", "utf8")
+);
+
+let bot = null;
+
+let reconnectTimer = null;
+let antiAfkTimer = null;
+let movementTimer = null;
+let jumpTimer = null;
+
+let reconnectAttempts = 0;
+let moving = false;
+
+// --------------------------------------------------
+// LOG
+// --------------------------------------------------
+
+function log(message) {
+  console.log(`[CoolSMP Bot] ${message}`);
+}
+
+// --------------------------------------------------
+// CLEAR TIMERS
+// --------------------------------------------------
+
+function clearTimers() {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+
+  if (antiAfkTimer) {
+    clearInterval(antiAfkTimer);
+    antiAfkTimer = null;
+  }
+
+  if (movementTimer) {
+    clearTimeout(movementTimer);
+    movementTimer = null;
+  }
+
+  if (jumpTimer) {
+    clearInterval(jumpTimer);
+    jumpTimer = null;
+  }
+
+  moving = false;
+}
+
+// --------------------------------------------------
+// CREATE BOT
+// --------------------------------------------------
+
+function createBot() {
+  clearTimers();
+
+  log("Connecting to Cool SMP...");
+
+  bot = mineflayer.createBot({
+    host: settings.server.host,
+    port: settings.server.port,
+    username: settings.bot.username,
+    version: settings.server.version
+  });
+
+  // ------------------------------------------------
+  // SPAWN
+  // ------------------------------------------------
+
+  bot.once("spawn", () => {
+    reconnectAttempts = 0;
+
+    log("Bot joined Cool SMP successfully! 🟢");
+
+    // AuthMe
+    if (
+      settings.bot.authMe &&
+      settings.bot.authMe.enabled
+    ) {
+      setTimeout(loginAuthMe, 2500);
+    }
+
+    // Anti-AFK
+    if (
+      settings.behavior &&
+      settings.behavior.antiAfk
+    ) {
+      startAntiAfk();
+    }
+
+    // Movement
+    if (
+      settings.movement &&
+      settings.movement.enabled
+    ) {
+      startMovement();
+    }
+  });
+
+  // ------------------------------------------------
+  // CHAT COMMANDS
+  // ------------------------------------------------
+
+  bot.on("chat", (username, message) => {
+    if (!bot) return;
+
+    // Ignore own messages
+    if (username === bot.username) return;
+
+    if (
+      !settings.behavior ||
+      !settings.behavior.chatCommandsEnabled
+    ) {
+      return;
+    }
+
+    const command = message.trim().toLowerCase();
+
+    if (command === "!help") {
+      bot.chat(
+        "Bot commands: !help, !ping, !status"
+      );
+    }
+
+    else if (command === "!ping") {
+      bot.chat("Pong!");
+    }
+
+    else if (command === "!status") {
+      bot.chat("Cool SMP bot is online.");
+    }
+  });
+
+  // ------------------------------------------------
+  // KICKED
+  // ------------------------------------------------
+
+  bot.on("kicked", (reason) => {
+    log(`Kicked from server: ${reason}`);
+  });
+
+  // ------------------------------------------------
+  // ERROR
+  // ------------------------------------------------
+
+  bot.on("error", (error) => {
+    log(`Error: ${error.message}`);
+  });
+
+  // ------------------------------------------------
+  // DISCONNECTED
+  // ------------------------------------------------
+
+  bot.on("end", (reason) => {
+    log(
+      `Disconnected: ${reason || "unknown reason"}`
+    );
+
+    clearTimers();
+
+    scheduleReconnect();
+  });
+}
+
+// --------------------------------------------------
+// AUTHME LOGIN
+// --------------------------------------------------
+
+function loginAuthMe() {
+  if (!bot) return;
+
+  const auth = settings.bot.authMe;
+
+  if (!auth || !auth.enabled) {
+    return;
+  }
+
+  if (
+    !auth.password ||
+    auth.password === "CHANGE_THIS_PASSWORD"
+  ) {
+    log(
+      "⚠️ Set the AuthMe password in settings.json."
+    );
+    return;
+  }
+
+  log("Logging in with AuthMe...");
+
+  bot.chat(
+    `${auth.loginCommand} ${auth.password}`
+  );
+}
+
+// --------------------------------------------------
+// ANTI-AFK
+// --------------------------------------------------
+
+function startAntiAfk() {
+  if (!settings.behavior) return;
+
+  const interval =
+    settings.behavior.antiAfkIntervalMs || 30000;
+
+  antiAfkTimer = setInterval(() => {
+    if (!bot || !bot.entity) return;
+
+    // Don't interfere with movement jumping
+    if (moving) return;
+
+    bot.setControlState("jump", true);
+
+    setTimeout(() => {
+      if (bot) {
+        bot.setControlState("jump", false);
+      }
+    }, 350);
+
+  }, interval);
+}
+
+// --------------------------------------------------
+// MOVEMENT
+// --------------------------------------------------
+
+function startMovement() {
+  if (!settings.movement) return;
+
+  const cfg = settings.movement;
+
+  const walkDuration =
+    Math.max(1000, cfg.walkDurationMs || 5000);
+
+  const pauseDuration =
+    Math.max(500, cfg.pauseDurationMs || 2500);
+
+  const jumpEvery =
+    Math.max(2000, cfg.jumpEveryMs || 12000);
+
+  // -----------------------------------------------
+  // WALK CYCLE
+  // -----------------------------------------------
+
+  function walkCycle() {
+    if (!bot || !bot.entity) {
+      return;
+    }
+
+    moving = true;
+
+    // Random direction
+    const randomYaw =
+      Math.random() * Math.PI * 2;
+
+    bot.look(
+      randomYaw,
+      0,
+      true
+    ).catch(() => {});
+
+    // Walk forward
+    bot.setControlState(
+      "forward",
+      true
+    );
+
+    log("Movement: walking 🚶");
+
+    movementTimer = setTimeout(() => {
+      if (!bot) return;
+
+      // Stop walking
+      bot.setControlState(
+        "forward",
+        false
+      );
+
+      moving = false;
+
+      log("Movement: paused ⏸️");
+
+      // Random look
+      if (
+        cfg.randomLook &&
+        bot.entity
+      ) {
+        const lookYaw =
+          Math.random() * Math.PI * 2;
+
+        const lookPitch =
+          (Math.random() - 0.5) * 0.3;
+
+        bot.look(
+          lookYaw,
+          lookPitch,
+          true
+        ).catch(() => {});
+      }
+
+      // Pause before walking again
+      movementTimer = setTimeout(
+        walkCycle,
+        pauseDuration
+      );
+
+    }, walkDuration);
+  }
+
+  // -----------------------------------------------
+  // JUMP WHILE MOVING
+  // -----------------------------------------------
+
+  jumpTimer = setInterval(() => {
+    if (!bot || !bot.entity) return;
+
+    // Only jump during movement
+    if (!moving) return;
+
+    bot.setControlState(
+      "jump",
+      true
+    );
+
+    setTimeout(() => {
+      if (bot) {
+        bot.setControlState(
+          "jump",
+          false
+        );
+      }
+    }, 300);
+
+  }, jumpEvery);
+
+  // Start movement
+  walkCycle();
+}
+
+// --------------------------------------------------
+// RECONNECT
+// --------------------------------------------------
+
+function scheduleReconnect() {
+  if (
+    !settings.bot.reconnect ||
+    !settings.bot.reconnect.enabled
+  ) {
+    log("Automatic reconnect is disabled.");
+    return;
+  }
+
+  const maxAttempts =
+    settings.bot.reconnect.maxAttempts || 0;
+
+  // 0 = unlimited attempts
+  if (
+    maxAttempts > 0 &&
+    reconnectAttempts >= maxAttempts
+  ) {
+    log(
+      "Maximum reconnect attempts reached."
+    );
+    return;
+  }
+
+  reconnectAttempts++;
+
+  const delay =
+    settings.bot.reconnect.delayMs || 10000;
+
+  log(
+    `Reconnecting in ${delay / 1000} seconds...`
+  );
+
+  reconnectTimer = setTimeout(() => {
+    createBot();
+  }, delay);
+}
+
+// --------------------------------------------------
+// CLEAN SHUTDOWN
+// --------------------------------------------------
+
+process.on("SIGINT", () => {
+  log("Shutting down bot...");
+
+  clearTimers();
+
+  if (bot) {
+    bot.quit("Bot shutting down");
+  }
+
+  process.exit(0);
+});
+
+// --------------------------------------------------
+// START BOT
+// --------------------------------------------------
+
+createBot();
