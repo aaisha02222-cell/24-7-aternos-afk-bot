@@ -140,6 +140,17 @@ function createBot() {
     else if (command === "!status") {
       bot.chat("Cool SMP bot is online.");
     }
+    else if (command === "!welcome") {
+  bot.chat("WELCOME TO COOL SMP");
+}
+
+else if (command === "!rules") {
+  bot.chat("PLEASE FOLLOW THE SERVER RULES");
+}
+
+else if (command === "!fun") {
+  bot.chat("HAVE FUN ! ENJOY ! :)");
+}
   });
 
   // ------------------------------------------------
